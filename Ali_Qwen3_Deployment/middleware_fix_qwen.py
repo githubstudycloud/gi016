@@ -25,7 +25,8 @@ MAX_CONTEXT_TOKENS = 80000
 # ===========================================
 
 app = FastAPI()
-client = httpx.AsyncClient(timeout=600.0)
+# trust_env=False: 禁止读取系统代理环境变量 (HTTP_PROXY 等)，确保请求直接发送给局域网/本地 vLLM
+client = httpx.AsyncClient(timeout=600.0, trust_env=False)
 
 def estimate_tokens(text):
     return len(text) // 3
