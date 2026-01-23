@@ -119,10 +119,60 @@ def parse_hermes_xml(content):
             if "name" not in tool_call_data:
                 print(f"⚠️ 工具调用缺少 name 字段: {clean_json}")
                 continue
+            
+            # === 参数归一化与修复 ===
+            name = tool_call_data.get("name")
+            args = tool_call_data.get("arguments", {})
+            
+            # 1. 如果 args 是字符串 (有时模型会把 JSON 当字符串输出)，尝试解析
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except:
+                    pass # 可能是真正的字符串参数
+            
+            # 2. 针对特定工具的修复逻辑
+            # TodoWrite: 期望 {"todos": [...], "merge": bool}
+            if name in ["TodoWrite", "todo_write"]:
+                # 如果 args 是列表，说明直接输出了 todo 列表 -> 包装一下
+                if isinstance(args, list):
+                    print(f"⚠️ [TodoWrite] 检测到列表参数，自动包装为 todos")
+                    args = {"todos": args, "merge": True} # 默认 merge=True
+                # 如果 args 是单个字典且看起来像个 Todo Item (有 content) 但没有 todos key
+                elif isinstance(args, dict) and "todos" not in args and "content" in args:
+                    print(f"⚠️ [TodoWrite] 检测到单个 Item，自动包装为 todos")
+                    args = {"todos": [args], "merge": True}
+            
+            # Bash/RunCommand: 期望 {"command": "..."}
+            elif name in ["Bash", "RunCommand", "run_command", "cmd"]:
+                # 如果 args 是字符串 -> {"command": args}
+                if isinstance(args, str):
+                    print(f"⚠️ [Bash] 检测到字符串参数，自动包装为 command")
+                    args = {"command": args}
+                # 如果是 dict 但用了 cmd/script 等别名
+                elif isinstance(args, dict):
+                    if "command" not in args:
+                        for alias in ["cmd", "script", "code"]:
+                            if alias in args:
+                                args["command"] = args.pop(alias)
+                                break
+
+            # Read/Write/Glob/Grep: 路径参数别名修复
+            # 期望 file_path 或 path
+            if isinstance(args, dict):
+                # 统一 file_path 和 path
+                if "path" in args and "file_path" not in args:
+                    # 某些工具可能定义了 path，这里不做强制转换，只是打印日志观察
+                    pass 
+            
+            # 回写修复后的参数
+            tool_call_data["arguments"] = args
                 
             arguments = tool_call_data.get("arguments", {})
             # 如果 arguments 还是 dict，转为 string (OpenAI 规范要求 arguments 是 JSON 字符串)
             if isinstance(arguments, dict):
+                arguments = json.dumps(arguments)
+            elif isinstance(arguments, list): # 理论上不应该发生，上面已经处理了
                 arguments = json.dumps(arguments)
             elif arguments is None:
                 arguments = "{}"

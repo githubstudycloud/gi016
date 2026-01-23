@@ -71,6 +71,24 @@ def parse_hermes_xml(content):
                  print(f"  ⚠️ Adapting 'function' field: {clean_json}")
                  tool_call_data["name"] = tool_call_data.pop("function")
             
+            # === 参数归一化与修复 (Copy from Middleware) ===
+            name = tool_call_data.get("name")
+            args = tool_call_data.get("arguments", {})
+            if isinstance(args, str):
+                try: args = json.loads(args)
+                except: pass
+            
+            if name in ["TodoWrite", "todo_write"]:
+                if isinstance(args, list):
+                    print(f"  ⚠️ [TodoWrite] Wrapped list -> todos")
+                    args = {"todos": args, "merge": True}
+                elif isinstance(args, dict) and "todos" not in args and "content" in args:
+                    print(f"  ⚠️ [TodoWrite] Wrapped item -> todos")
+                    args = {"todos": [args], "merge": True}
+            
+            tool_call_data["arguments"] = args
+            # ===============================================
+
             if tool_call_data:
                 print(f"  ✅ Parsed: {tool_call_data}")
                 tool_calls.append(tool_call_data)
@@ -123,6 +141,16 @@ test_cases = [
     # 7. Non-standard "function" format
     """<tool_call>
     {"function": "get_weather", "arguments": {"location": "Beijing"}}
+    </tool_call>""",
+
+    # 8. TodoWrite: List instead of object
+    """<tool_call>
+    {"name": "TodoWrite", "arguments": [{"content": "Task 1", "status": "pending"}]}
+    </tool_call>""",
+
+    # 9. TodoWrite: Single item instead of object
+    """<tool_call>
+    {"name": "TodoWrite", "arguments": {"content": "Task 2", "status": "pending"}}
     </tool_call>"""
 ]
 
