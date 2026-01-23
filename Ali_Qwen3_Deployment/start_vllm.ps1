@@ -14,8 +14,9 @@ python -m vllm.entrypoints.openai.api_server `
     --trust-remote-code `
     --tensor-parallel-size 4 `
     --gpu-memory-utilization 0.95 `
-    --max-model-len 32768 `
-    --enable-auto-tool-choice `
-    --quantization fp8 `
+    --max-model-len 32768 \
+    --enable-auto-tool-choice \
+    --tool-call-parser hermes `
+    --quantization fp8 \`
     --port 8000 `
     --served-model-name Qwen/Qwen3-235B-A22B-Instruct

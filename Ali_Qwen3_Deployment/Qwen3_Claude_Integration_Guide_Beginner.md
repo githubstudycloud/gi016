@@ -56,6 +56,7 @@ python -m vllm.entrypoints.openai.api_server \
     --gpu-memory-utilization 0.95 \
     --max-model-len 32768 \
     --enable-auto-tool-choice \
+    --tool-call-parser hermes \
     --quantization fp8 \
     --port 8000
 ```
@@ -66,6 +67,7 @@ python -m vllm.entrypoints.openai.api_server \
 *   `--tensor-parallel-size 4`: **重要！** 表示你用几张显卡来跑这个模型。如果你有 4 张卡，就填 4。
 *   `--max-model-len 32768`: 设置上下文长度。Qwen3 支持很长，但显存有限，设太大容易爆显存（OOM）。
 *   `--enable-auto-tool-choice`: **关键参数！** 开启这个，模型才能根据用户的问题自动决定“我是否需要调用工具”。没有它，工具调用将失效。
+*   `--tool-call-parser hermes`: **严格说明**：必须使用 `hermes`。因为 Qwen3 和 Qwen2.5 系列模型的官方 Chat Template 采用了 Hermes 风格的工具调用格式。如果选错（如不填或填 qwen），模型生成的工具调用代码将无法被 vLLM 正确解析，导致工具调用失败。
 *   `--quantization fp8`: 使用 FP8 量化加载，可以节省一半显存并提升速度。
 *   `--port 8000`: vLLM 服务监听的端口。
 
