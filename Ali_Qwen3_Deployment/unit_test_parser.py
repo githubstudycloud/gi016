@@ -88,12 +88,43 @@ def parse_hermes_xml(content):
             
             # === Path Aliasing (Copy from Middleware) ===
             if isinstance(args, dict):
+                # 1. 通用 path -> file_path
                 if "path" in args and "file_path" not in args:
                     print(f"  ⚠️ [{name}] Renamed 'path' -> 'file_path'")
                     args["file_path"] = args.pop("path")
                 if "filename" in args and "file_path" not in args:
                     print(f"  ⚠️ [{name}] Renamed 'filename' -> 'file_path'")
                     args["file_path"] = args.pop("filename")
+                
+                # 2. LS/Glob: file_path -> path (还原)
+                if name in ["LS", "ls", "Glob", "glob"]:
+                     if "file_path" in args and "path" not in args:
+                         print(f"  ⚠️ [{name}] Reverted 'file_path' -> 'path'")
+                         args["path"] = args.pop("file_path")
+                
+                # 3. DeleteFile: file_path -> [file_paths]
+                if name in ["DeleteFile", "delete_file"]:
+                    if "file_path" in args and "file_paths" not in args:
+                         print(f"  ⚠️ [{name}] Wrapped 'file_path' -> 'file_paths'")
+                         args["file_paths"] = [args.pop("file_path")]
+                    elif "path" in args and "file_paths" not in args:
+                         print(f"  ⚠️ [{name}] Wrapped 'path' -> 'file_paths'")
+                         args["file_paths"] = [args.pop("path")]
+                
+                # 4. Write: text/code -> content
+                if name in ["Write", "write_file", "WriteFile"]:
+                     if "text" in args and "content" not in args:
+                         print(f"  ⚠️ [{name}] Renamed 'text' -> 'content'")
+                         args["content"] = args.pop("text")
+                     if "code" in args and "content" not in args:
+                         print(f"  ⚠️ [{name}] Renamed 'code' -> 'content'")
+                         args["content"] = args.pop("code")
+
+                # 5. Grep: regex -> pattern
+                if name in ["Grep", "grep"]:
+                     if "regex" in args and "pattern" not in args:
+                         print(f"  ⚠️ [{name}] Renamed 'regex' -> 'pattern'")
+                         args["pattern"] = args.pop("regex")
             # ============================================
 
             tool_call_data["arguments"] = args
@@ -171,6 +202,26 @@ test_cases = [
     # 11. Read: filename instead of file_path
     """<tool_call>
     {"name": "Read", "arguments": {"filename": "/etc/hosts"}}
+    </tool_call>""",
+
+    # 12. Write: text/code instead of content
+    """<tool_call>
+    {"name": "Write", "arguments": {"file_path": "/tmp/test", "text": "hello"}}
+    </tool_call>""",
+
+    # 13. LS: file_path instead of path (reverse correction)
+    """<tool_call>
+    {"name": "LS", "arguments": {"file_path": "/var/log"}}
+    </tool_call>""",
+
+    # 14. DeleteFile: single file_path instead of list file_paths
+    """<tool_call>
+    {"name": "DeleteFile", "arguments": {"file_path": "/tmp/junk"}}
+    </tool_call>""",
+
+    # 15. Grep: regex instead of pattern
+    """<tool_call>
+    {"name": "Grep", "arguments": {"regex": "^Error", "path": "."}}
     </tool_call>"""
 ]
 
