@@ -161,9 +161,27 @@ def parse_hermes_xml(content):
             # 期望 file_path 或 path
             if isinstance(args, dict):
                 # 统一 file_path 和 path
+                # 许多工具 (如 Read, Write) 期望 file_path，但模型常输出 path
                 if "path" in args and "file_path" not in args:
-                    # 某些工具可能定义了 path，这里不做强制转换，只是打印日志观察
-                    pass 
+                    print(f"⚠️ [{name}] 检测到 'path' 参数，自动重命名为 'file_path'")
+                    args["file_path"] = args.pop("path")
+                
+                # 某些情况下模型可能输出 filename
+                if "filename" in args and "file_path" not in args:
+                    print(f"⚠️ [{name}] 检测到 'filename' 参数，自动重命名为 'file_path'")
+                    args["file_path"] = args.pop("filename")
+                    
+                # 针对 Read 工具的特殊检查
+                if name in ["Read", "read_file", "ReadFile"]:
+                     # 如果没有 limit，加上默认值 (虽然 API 可能有默认值，但显式给更安全)
+                     if "limit" not in args:
+                         pass # 暂时不加，避免覆盖 API 默认行为，除非报错
+                     # 如果 limit 是字符串，转 int
+                     if "limit" in args and isinstance(args["limit"], str):
+                         try:
+                             args["limit"] = int(args["limit"])
+                         except:
+                             pass
             
             # 回写修复后的参数
             tool_call_data["arguments"] = args

@@ -86,6 +86,16 @@ def parse_hermes_xml(content):
                     print(f"  ⚠️ [TodoWrite] Wrapped item -> todos")
                     args = {"todos": [args], "merge": True}
             
+            # === Path Aliasing (Copy from Middleware) ===
+            if isinstance(args, dict):
+                if "path" in args and "file_path" not in args:
+                    print(f"  ⚠️ [{name}] Renamed 'path' -> 'file_path'")
+                    args["file_path"] = args.pop("path")
+                if "filename" in args and "file_path" not in args:
+                    print(f"  ⚠️ [{name}] Renamed 'filename' -> 'file_path'")
+                    args["file_path"] = args.pop("filename")
+            # ============================================
+
             tool_call_data["arguments"] = args
             # ===============================================
 
@@ -151,6 +161,16 @@ test_cases = [
     # 9. TodoWrite: Single item instead of object
     """<tool_call>
     {"name": "TodoWrite", "arguments": {"content": "Task 2", "status": "pending"}}
+    </tool_call>""",
+
+    # 10. Read: path instead of file_path
+    """<tool_call>
+    {"name": "Read", "arguments": {"path": "/etc/hosts"}}
+    </tool_call>""",
+
+    # 11. Read: filename instead of file_path
+    """<tool_call>
+    {"name": "Read", "arguments": {"filename": "/etc/hosts"}}
     </tool_call>"""
 ]
 
