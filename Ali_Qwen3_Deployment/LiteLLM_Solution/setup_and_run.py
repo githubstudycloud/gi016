@@ -27,30 +27,60 @@ def run_litellm_proxy():
         print(f"❌ 找不到配置文件: {config_path}")
         return
 
-    # 构建启动命令
-    # litellm --config <path> --port 4000
+    # 尝试多种方式启动 LiteLLM
+    # 方式 1: 直接使用 litellm 命令 (如果已在 PATH 中)
+    print("📋 尝试方式 1: 使用 'litellm' 命令...")
+    cmd = [
+        "litellm",
+        "--config", config_path,
+        "--port", "4000",
+        "--detailed_debug"
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True)
+        return
+    except FileNotFoundError:
+        print("⚠️ 'litellm' 命令未找到，尝试方式 2...")
+    except Exception as e:
+        print(f"⚠️ 方式 1 失败: {e}")
+
+    # 方式 2: 使用 sys.executable -m litellm (如果支持)
+    print("📋 尝试方式 2: 使用 'python -m litellm'...")
     cmd = [
         sys.executable, "-m", "litellm",
         "--config", config_path,
         "--port", "4000",
-        "--detailed_debug" # 开启详细调试
+        "--detailed_debug"
     ]
-    
-    print(f"📋 执行命令: {' '.join(cmd)}")
-    print("💡 提示: 请确保 vLLM 已在 8001 端口启动 (API Base: http://localhost:8001/v1)")
-    print("💡 提示: 客户端连接地址: http://localhost:4000")
-    print("💡 提示: 客户端 API Key: sk-1234")
-    print("-" * 50)
-
     try:
-        # 启动子进程
         subprocess.run(cmd, check=True)
-    except KeyboardInterrupt:
-        print("\n🛑 服务已停止 (用户中断)")
+        return
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ 服务异常退出: {e}")
+         print(f"⚠️ 方式 2 失败 (可能是包结构不支持): {e}")
     except Exception as e:
-        print(f"\n❌ 发生未知错误: {e}")
+         print(f"⚠️ 方式 2 失败: {e}")
+
+    # 方式 3: 尝试从 Python 脚本内部调用 (终极方案)
+    print("📋 尝试方式 3: 使用 Python 代码直接调用...")
+    try:
+        from litellm.proxy.proxy_cli import run_server
+        # 构造参数列表 (模拟 argv)
+        sys.argv = [
+            "litellm",
+            "--config", config_path,
+            "--port", "4000",
+            "--detailed_debug"
+        ]
+        run_server()
+        return
+    except ImportError:
+        print("❌ 无法导入 litellm.proxy.proxy_cli，请检查安装！")
+    except Exception as e:
+        print(f"❌ 方式 3 失败: {e}")
+
+    print("\n❌ 所有启动方式均失败。")
+    print("请尝试手动运行: litellm --config litellm_config.yaml --port 4000")
 
 if __name__ == "__main__":
     # 1. 检查并安装依赖
