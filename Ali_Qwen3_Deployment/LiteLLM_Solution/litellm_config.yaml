@@ -15,6 +15,17 @@ model_list:
       api_key: sk-empty
       debug: true
 
+  # Remote Qwen-235B (LAN)
+  # 客户端请求模型名: qwen-235b
+  - model_name: qwen-235b
+    litellm_params:
+      # 远端 vLLM 实际加载的模型名称 (通常保持默认，或者根据远端实际情况修改)
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      # ⚠️ 请将 192.168.1.X 替换为您局域网服务器的实际 IP 地址
+      api_base: http://192.168.1.X:8001/v1
+      api_key: empty
+      debug: true
+
 general_settings:
   # Master key for client connection
   master_key: sk-1234

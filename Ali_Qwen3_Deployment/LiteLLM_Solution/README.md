@@ -44,9 +44,27 @@ claude-code
 
 ```yaml
 model_list:
-  - model_name: claude-3-5-sonnet-20240620  # 客户端看到的模型名
+  # 1. 本地转发示例
+  - model_name: claude-3-5-sonnet-20240620
     litellm_params:
-      model: openai/Qwen/Qwen3-235B-A22B-Instruct # 实际调用的后端模型 (openai/ 前缀表示通用 OpenAI 格式)
-      api_base: http://localhost:8001/v1    # vLLM 地址
-      api_key: sk-empty                     # vLLM Key
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      api_base: http://localhost:8001/v1
+
+  # 2. 局域网远程转发示例 (新增)
+  - model_name: qwen-235b
+    litellm_params:
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      # ⚠️ 修改此处 IP 为实际服务器地址
+      api_base: http://192.168.1.X:8001/v1
+      api_key: empty
 ```
+
+## 📝 常见操作
+
+### 修改远程服务器 IP
+打开 `litellm_config.yaml`，找到 `qwen-235b` 部分，将 `api_base` 中的 `192.168.1.X` 修改为您实际的局域网 IP 地址。
+
+### 重启服务
+修改配置后，必须重启服务才能生效：
+1. 在终端按 `Ctrl+C` 停止服务。
+2. 运行 `python setup_and_run.py` 重新启动。
