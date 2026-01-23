@@ -4,6 +4,7 @@ import re
 import uvicorn
 import httpx
 import time
+import ast
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -50,6 +51,8 @@ def parse_hermes_xml(content):
         matches = re.findall(pattern_lazy, content, re.DOTALL | re.IGNORECASE)
 
     for i, (tag_name, code_str) in enumerate(matches):
+        print(f"🔍 尝试解析工具内容片段 (Tag: {tag_name}): {code_str[:100]}...")
+        
         try:
             # 清洗可能残留的 markdown 标记
             clean_json = code_str.strip()
@@ -57,9 +60,38 @@ def parse_hermes_xml(content):
             clean_json = re.sub(r"\s*```$", "", clean_json)
             clean_json = clean_json.strip()
             
-            if not clean_json: continue
+            if not clean_json: 
+                print("⚠️ 内容为空，跳过")
+                continue
 
-            tool_call_data = json.loads(clean_json)
+            tool_call_data = None
+            
+            # 策略1: 直接 JSON 解析
+            try:
+                tool_call_data = json.loads(clean_json)
+            except json.JSONDecodeError:
+                # 策略2: 尝试 Python AST 解析 (容忍单引号)
+                try:
+                    tool_call_data = ast.literal_eval(clean_json)
+                except:
+                    pass
+            
+            # 策略3: 如果内容包含额外文本，尝试提取第一个 {...} 块
+            if tool_call_data is None:
+                json_match = re.search(r"(\{.*\})", clean_json, re.DOTALL)
+                if json_match:
+                    potential_json = json_match.group(1)
+                    try:
+                        tool_call_data = json.loads(potential_json)
+                    except:
+                        try:
+                            tool_call_data = ast.literal_eval(potential_json)
+                        except:
+                            pass
+            
+            if tool_call_data is None:
+                print(f"⚠️ 无法解析为 JSON 或 Python Dict: {clean_json}")
+                continue
             
             # 验证必要字段
             if "name" not in tool_call_data:
@@ -78,8 +110,8 @@ def parse_hermes_xml(content):
                     "arguments": arguments
                 }
             })
-        except json.JSONDecodeError as e:
-            print(f"⚠️ 解析工具调用 JSON 失败: {e}\n原始内容: {code_str}")
+        except Exception as e:
+            print(f"⚠️ 解析工具调用发生异常: {e}\n原始内容: {code_str}")
             continue
             
     return tool_calls
