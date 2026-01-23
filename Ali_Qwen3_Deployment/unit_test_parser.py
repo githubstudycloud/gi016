@@ -54,6 +54,23 @@ def parse_hermes_xml(content):
                         except:
                             pass
             
+            # Case 1: {"tool": "bash", "command": "ls"} -> {"name": "bash", "arguments": {"command": "ls"}}
+            if "name" not in tool_call_data and "tool" in tool_call_data:
+                print(f"  ⚠️ Adapting 'tool' field: {clean_json}")
+                tool_name = tool_call_data.pop("tool")
+                if "arguments" not in tool_call_data:
+                     tool_call_data = {
+                         "name": tool_name,
+                         "arguments": tool_call_data
+                     }
+                else:
+                    tool_call_data["name"] = tool_name
+
+            # Case 2: {"function": "bash", ...}
+            if "name" not in tool_call_data and "function" in tool_call_data:
+                 print(f"  ⚠️ Adapting 'function' field: {clean_json}")
+                 tool_call_data["name"] = tool_call_data.pop("function")
+            
             if tool_call_data:
                 print(f"  ✅ Parsed: {tool_call_data}")
                 tool_calls.append(tool_call_data)
@@ -96,6 +113,16 @@ test_cases = [
     # 5. Broken JSON (should fail but handle gracefully)
     """<tool_call>
     {name: invalid}
+    </tool_call>""",
+
+    # 6. Non-standard "tool" + "command" format
+    """<tool_call>
+    {"tool": "bash", "command": "ls -la"}
+    </tool_call>""",
+
+    # 7. Non-standard "function" format
+    """<tool_call>
+    {"function": "get_weather", "arguments": {"location": "Beijing"}}
     </tool_call>"""
 ]
 

@@ -93,14 +93,39 @@ def parse_hermes_xml(content):
                 print(f"⚠️ 无法解析为 JSON 或 Python Dict: {clean_json}")
                 continue
             
+            # === 适配逻辑：兼容非标准格式 (如 tool + command) ===
+            # Case 1: {"tool": "bash", "command": "ls"} -> {"name": "bash", "arguments": {"command": "ls"}}
+            if "name" not in tool_call_data and "tool" in tool_call_data:
+                print(f"⚠️ 检测到 'tool' 字段但无 'name'，尝试自动适配: {clean_json}")
+                tool_name = tool_call_data.pop("tool")
+                # 剩下的字段作为 arguments
+                # 注意：如果原本就有 arguments 字段，则合并或保留
+                if "arguments" not in tool_call_data:
+                     # 将剩下的所有字段视为参数
+                     tool_call_data = {
+                         "name": tool_name,
+                         "arguments": tool_call_data
+                     }
+                else:
+                    # 只是重命名 tool -> name
+                    tool_call_data["name"] = tool_name
+
+            # Case 2: {"function": "bash", ...}
+            if "name" not in tool_call_data and "function" in tool_call_data:
+                 print(f"⚠️ 检测到 'function' 字段但无 'name'，尝试自动适配: {clean_json}")
+                 tool_call_data["name"] = tool_call_data.pop("function")
+
             # 验证必要字段
             if "name" not in tool_call_data:
                 print(f"⚠️ 工具调用缺少 name 字段: {clean_json}")
                 continue
                 
             arguments = tool_call_data.get("arguments", {})
+            # 如果 arguments 还是 dict，转为 string (OpenAI 规范要求 arguments 是 JSON 字符串)
             if isinstance(arguments, dict):
                 arguments = json.dumps(arguments)
+            elif arguments is None:
+                arguments = "{}"
             
             tool_calls.append({
                 "id": f"call_{i}_{os.urandom(4).hex()}",
