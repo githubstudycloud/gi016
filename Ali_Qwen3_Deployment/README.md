@@ -41,13 +41,13 @@ python -m vllm.entrypoints.openai.api_server `
     --trust-remote-code `
     --tensor-parallel-size 4 `
     --gpu-memory-utilization 0.95 `
-    --max-model-len 32768 `
-    --enable-auto-tool-choice `
+    --max-model-len 32768 \
+    --enable-auto-tool-choice \
     --tool-call-parser hermes `
-    --quantization fp8 `
+    --quantization fp8 \
     --port 8000
 ```
-*注意: `--tool-call-parser hermes` 或 `qwen` 是处理工具调用的关键，不同 vLLM 版本可能略有不同，请优先尝试不加该参数，若有问题再指定。*
+*注意: 必须指定 `--tool-call-parser hermes`，因为 Qwen3 使用 Hermes 风格的工具调用格式。*
 
 ## 4. 配置 LiteLLM 支持 Claude Code 协议
 
