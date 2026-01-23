@@ -127,6 +127,22 @@ def parse_hermes_xml(content):
                          args["pattern"] = args.pop("regex")
             # ============================================
 
+            # === TodoWrite Deep Fix (Copy from Middleware) ===
+            import time
+            if name in ["TodoWrite", "todo_write"] and isinstance(args, dict) and "todos" in args and isinstance(args["todos"], list):
+                for idx, item in enumerate(args["todos"]):
+                    if isinstance(item, dict):
+                        if "id" not in item:
+                            item["id"] = f"todo_{int(time.time())}_{idx}"
+                            print(f"  ⚠️ [TodoWrite] Auto-generated id")
+                        if "status" not in item:
+                            item["status"] = "pending"
+                            print(f"  ⚠️ [TodoWrite] Auto-filled status")
+                        if "priority" not in item:
+                            item["priority"] = "medium"
+                            print(f"  ⚠️ [TodoWrite] Auto-filled priority")
+            # =================================================
+
             tool_call_data["arguments"] = args
             # ===============================================
 
@@ -222,6 +238,11 @@ test_cases = [
     # 15. Grep: regex instead of pattern
     """<tool_call>
     {"name": "Grep", "arguments": {"regex": "^Error", "path": "."}}
+    </tool_call>""",
+
+    # 16. TodoWrite: Missing required fields (id, status, priority)
+    """<tool_call>
+    {"name": "TodoWrite", "arguments": {"todos": [{"content": "Fix bug"}]}}
     </tool_call>"""
 ]
 

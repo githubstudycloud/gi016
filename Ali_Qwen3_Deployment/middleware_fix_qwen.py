@@ -143,6 +143,25 @@ def parse_hermes_xml(content):
                     print(f"⚠️ [TodoWrite] 检测到单个 Item，自动包装为 todos")
                     args = {"todos": [args], "merge": True}
             
+                # 进一步检查 todos 列表中的必填字段 (id, status, priority)
+                if isinstance(args, dict) and "todos" in args and isinstance(args["todos"], list):
+                    for idx, item in enumerate(args["todos"]):
+                        if isinstance(item, dict):
+                            # Ensure 'id'
+                            if "id" not in item:
+                                item["id"] = f"todo_{int(time.time())}_{idx}"
+                                print(f"⚠️ [TodoWrite] Auto-generated missing id for item {idx}")
+                            
+                            # Ensure 'status'
+                            if "status" not in item:
+                                item["status"] = "pending"
+                                print(f"⚠️ [TodoWrite] Auto-filled missing status='pending' for item {idx}")
+                                
+                            # Ensure 'priority'
+                            if "priority" not in item:
+                                item["priority"] = "medium"
+                                print(f"⚠️ [TodoWrite] Auto-filled missing priority='medium' for item {idx}")
+
             # Bash/RunCommand: 期望 {"command": "..."}
             elif name in ["Bash", "RunCommand", "run_command", "cmd"]:
                 # 如果 args 是字符串 -> {"command": args}
