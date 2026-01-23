@@ -32,27 +32,33 @@ def estimate_tokens(text):
     return len(text) // 3
 
 def parse_hermes_xml(content):
-    """尝试从文本中提取 Hermes 风格的 <tool_code> XML"""
+    """尝试从文本中提取 Hermes 风格的 <tool_code> 或 Qwen 风格的 <tool_call> XML"""
     tool_calls = []
-    # 增强正则：支持换行、Markdown 代码块
-    # 匹配模式：<tool_code>...内容...</tool_code>，内容可能包含 ```json ... ```
-    pattern = r"<tool_code>\s*(?:```json)?\s*(.*?)\s*(?:```)?\s*</tool_code>"
+    
+    # 1. 统一标签: 将 <tool_call> 替换为 <tool_code> 以便统一处理，或者支持两种
+    # 我们支持两种标签：tool_code (Hermes) 和 tool_call (Qwen)
+    
+    # 匹配模式：支持 tool_code 或 tool_call
+    # Group 1: 标签名 (tool_code|tool_call)
+    # Group 2: 内容
+    pattern = r"<(tool_code|tool_call)>\s*(?:```json)?\s*(.*?)\s*(?:```)?\s*</\1>"
     matches = re.findall(pattern, content, re.DOTALL | re.IGNORECASE)
     
     if not matches:
-        # 尝试备用模式：直接匹配 ```json { ... } ``` 如果它紧跟在某些关键词后面？
-        # 目前先只依赖 tool_code
-        pass
+        # 备用：尝试匹配未闭合的标签
+        pattern_lazy = r"<(tool_code|tool_call)>\s*(?:```json)?\s*(.*?)\s*(?:```)?\s*$"
+        matches = re.findall(pattern_lazy, content, re.DOTALL | re.IGNORECASE)
 
-    for i, code_str in enumerate(matches):
+    for i, (tag_name, code_str) in enumerate(matches):
         try:
             # 清洗可能残留的 markdown 标记
             clean_json = code_str.strip()
-            if clean_json.startswith("```json"): clean_json = clean_json[7:]
-            if clean_json.startswith("```"): clean_json = clean_json[3:]
-            if clean_json.endswith("```"): clean_json = clean_json[:-3]
+            clean_json = re.sub(r"^```(?:json)?\s*", "", clean_json, flags=re.IGNORECASE)
+            clean_json = re.sub(r"\s*```$", "", clean_json)
             clean_json = clean_json.strip()
             
+            if not clean_json: continue
+
             tool_call_data = json.loads(clean_json)
             
             # 验证必要字段
@@ -148,36 +154,35 @@ def convert_claude_messages_to_openai(claude_body):
     return openai_messages, raw_tools
 
 def generate_tool_system_prompt(tools):
-    """生成 Hermes/Qwen 风格的工具定义 Prompt (增强版)"""
-    tools_json = json.dumps(tools, indent=2)
-    prompt = f"""
-# Tool Usage Instructions
-You are an intelligent assistant capable of using tools. You have access to the following tools:
+    """生成 Qwen 2.5/3 官方推荐的工具定义 Prompt"""
+    
+    # 1. 转换为 OpenAI 标准格式 (type: function)
+    openai_tools = []
+    for tool in tools:
+        openai_tools.append({
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["parameters"]
+            }
+        })
+    
+    tools_json = json.dumps(openai_tools, indent=None) # Compact JSON
+    
+    prompt = f"""# Tools
 
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
 <tools>
 {tools_json}
 </tools>
 
-# How to use tools
-1. When you need to get information or perform an action, choose the appropriate tool from the list.
-2. Output the tool call **strictly** inside <tool_code> tags.
-3. The content inside <tool_code> must be a valid JSON object with "name" and "arguments".
-
-# Example
-User: "What's the weather in Beijing?"
-Assistant:
-<tool_code>
-{{
-    "name": "get_weather",
-    "arguments": {{
-        "location": "Beijing"
-    }}
-}}
-</tool_code>
-
-# Important
-- Do NOT output the tool call in Markdown code blocks (like ```json). Just use <tool_code> tags directly.
-- If no tool is needed, just respond with normal text.
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{{"name": <function-name>, "arguments": <args-json-object>}}
+</tool_call>
 """
     return prompt
 
@@ -190,13 +195,12 @@ def convert_openai_response_to_claude(openai_resp):
     stop_reason = "end_turn"
     
     # 1. 处理文本内容
-    # 如果有工具调用，通常不需要返回 content，除非是 thinking process
-    # 但 Claude Code 可能需要 text 来显示思考过程
     raw_content = message.get("content", "")
     
-    # 尝试移除 raw_content 中的 <tool_code> 部分，只保留思考文本
-    # 这样用户界面上不会显示 XML 代码
-    display_text = re.sub(r"<tool_code>.*?</tool_code>", "", raw_content, flags=re.DOTALL).strip()
+    # 尝试移除 raw_content 中的 <tool_code> 或 <tool_call> 部分，只保留思考文本
+    display_text = re.sub(r"<(tool_code|tool_call)>.*?</\1>", "", raw_content, flags=re.DOTALL).strip()
+    # 还要移除可能的残留闭合标签
+    display_text = re.sub(r"</(tool_code|tool_call)>", "", display_text).strip()
     
     if display_text:
         claude_content.append({
@@ -261,10 +265,17 @@ async def proxy_claude_messages(request: Request):
         openai_messages, raw_tools = convert_claude_messages_to_openai(body)
         
         # === 核心修正：工具 Prompt 注入 ===
+        stop_tokens = [] # 动态停止词
+        
         if raw_tools:
             tool_prompt = generate_tool_system_prompt(raw_tools)
+            stop_tokens = ["</tool_call>", "</tool_code>"] # 告诉模型写完工具调用就停
             
-            # A. 注入到 System Prompt (首选)
+            # 策略：如果 messages 里没有 system，就新建一个。
+            # 如果有，我们在 User 消息里注入提醒，而不是仅仅修改 System Prompt
+            # 因为长对话中 System Prompt 容易被遗忘
+            
+            # A. 确保 System Prompt 存在
             system_msg_index = -1
             for i, msg in enumerate(openai_messages):
                 if msg["role"] == "system":
@@ -272,16 +283,19 @@ async def proxy_claude_messages(request: Request):
                     break
             
             if system_msg_index >= 0:
+                # 替换或追加到现有 system
                 openai_messages[system_msg_index]["content"] += "\n\n" + tool_prompt
             else:
+                # 插入新的 system 消息到开头
                 openai_messages.insert(0, {
                     "role": "system",
                     "content": tool_prompt
                 })
             
-            # B. [强化] 注入到最后一条 User Message (如果 Context 很长，System Prompt 可能被遗忘)
+            # B. [关键] 在最后一条 User Message 追加强力提醒
+            # 只有当用户确实在说话时才追加
             if openai_messages and openai_messages[-1]["role"] == "user":
-                reminder = "\n\n(Reminder: You have tools available. Use <tool_code> JSON format to call them if needed.)"
+                reminder = "\n\n(IMPORTANT: If you need to use a tool, output the JSON inside <tool_call> tags immediately. Do not explain.)"
                 openai_messages[-1]["content"] += reminder
             
             print(f"💉 已注入 {len(raw_tools)} 个工具定义 (System + User Reminder)")
@@ -292,7 +306,8 @@ async def proxy_claude_messages(request: Request):
             "messages": openai_messages,
             "max_tokens": body.get("max_tokens", 4096),
             "temperature": body.get("temperature", 0.7),
-            "stream": False 
+            "stream": False,
+            "stop": stop_tokens if stop_tokens else None # 使用 Stop Token 防止废话
         }
         
         # 🚫 删除 API 参数
@@ -313,20 +328,28 @@ async def proxy_claude_messages(request: Request):
             
         openai_result = response.json()
         
-        # === 调试日志：打印模型原始回复，方便排查 ===
+        # === 调试日志 ===
         raw_response_content = openai_result["choices"][0]["message"].get("content", "")
         print(f"🔍 [Model Response Preview]: {raw_response_content[:200]}...")
-        if "<tool_code>" in raw_response_content:
+        if "<tool_call>" in raw_response_content or "<tool_code>" in raw_response_content:
             print("✨ 检测到 XML 标记！")
         else:
             print("⚠️ 未检测到 XML 标记 (可能是纯文本回复)")
-        # ==========================================
+        # ==============
 
         # 4. 检查并修复 XML 工具调用
         choice = openai_result["choices"][0]
         content = choice["message"].get("content", "") or ""
         
-        if "<tool_code>" in content:
+        # 如果因为 stop token 停止，我们需要把被截断的闭合标签补回来以便正则匹配
+        if openai_result["choices"][0].get("finish_reason") == "stop":
+             # 检查是否以未闭合的标签结尾
+             if "<tool_call>" in content and "</tool_call>" not in content:
+                 content += "</tool_call>"
+             elif "<tool_code>" in content and "</tool_code>" not in content:
+                 content += "</tool_code>"
+        
+        if "<tool_call>" in content or "<tool_code>" in content:
             print(f"🛠️ 正在解析 XML 工具调用...")
             extracted_tools = parse_hermes_xml(content)
             if extracted_tools:
