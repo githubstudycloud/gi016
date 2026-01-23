@@ -108,5 +108,7 @@ A: 检查 vLLM 后台日志。
 - 如果显示 `Invalid tool_choice` -> 在 vLLM 启动参数中移除或更换 `--tool-call-parser`。
 - 确保 LiteLLM 版本是最新的，它对 Qwen 的 Function Calling 转换有专门优化。
 
-**Q: 工具调用不执行？**
-A: Qwen3 的 Prompt Template 必须正确加载。确保下载模型时包含 `tokenizer_config.json`。
+## 7. 更多文档资源
+
+*   [📘 新手详细部署教程 (vLLM + LiteLLM)](./Qwen3_Claude_Integration_Guide_Beginner.md): 如果您是第一次部署，请从这里开始。包含详细的参数解释和步骤。
+*   [🔧 无需重启 vLLM 的修复方案](./Qwen3_No_Restart_Fix_Guide.md): 如果您无法修改 vLLM 启动参数（无法添加 hermes parser），请参考此文档使用 Python 中间件进行热修复。
