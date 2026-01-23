@@ -2,7 +2,10 @@ model_list:
   # Forward Claude requests to local Qwen3 deployment
   - model_name: claude-3-5-sonnet-20240620
     litellm_params:
-      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      # If using generic OpenAI compatible endpoint, you can use 'openai/' prefix 
+      # OR just the raw model name if the server expects it exactly.
+      # User confirmed their server expects "Qwen/Qwen3-235B-A22B-Instruct" without "openai/" prefix
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct 
       api_base: http://localhost:8001/v1
       api_key: sk-empty
       debug: true
@@ -19,8 +22,37 @@ model_list:
   # 客户端请求模型名: qwen-235b
   - model_name: qwen-235b
     litellm_params:
-      # 远端 vLLM 实际加载的模型名称 (通常保持默认，或者根据远端实际情况修改)
-      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      # 远端 vLLM 实际加载的模型名称
+      # LiteLLM 规则: 
+      # 1. 如果 model 字段包含 "/", LiteLLM 通常会尝试解析 provider (如 openai/...)
+      # 2. 如果远端 vLLM 期望精确的模型名字符串，我们应该使用 openai/<model_name> 
+      #    并让 LiteLLM 把它作为 chat completion 的 model 参数发出去。
+      #    但是在 LiteLLM 中，'openai/' 前缀告诉它这是一个 OpenAI 兼容接口。
+      #    LiteLLM 会自动剥离 'openai/' 前缀发送给后端吗？
+      #    -> 是的，LiteLLM 发送给后端时，model 参数通常是 'Qwen/Qwen3-235B-A22B-Instruct'
+      #    如果您的 vLLM 报错 "model not found"，请尝试去掉 'openai/' 前缀，
+      #    但 LiteLLM 配置文件中 'model' 字段通常需要 provider 前缀。
+      #
+      #    为了强制 LiteLLM 使用 OpenAI 协议但不修改 model 名，保持 openai/ 前缀通常是安全的。
+      #    但既然用户明确指出接口没有这个前缀，我们可以尝试直接写，或者使用 provider: model 的格式。
+      #    
+      #    更稳妥的写法是:
+      #    model: openai/Qwen/Qwen3-235B-A22B-Instruct  (LiteLLM 内部路由标识)
+      #    
+      #    如果 LiteLLM 把 "openai/" 也发给了 vLLM，那就会报错。
+      #    
+      #    修正方案: 
+      #    如果 vLLM 里的模型名是 "Qwen/Qwen3-235B-A22B-Instruct"，
+      #    LiteLLM 配置里写 model: openai/Qwen/Qwen3-235B-A22B-Instruct 是标准做法。
+      #    LiteLLM 会识别 "openai" 为 provider，然后向 api_base 发送请求，
+      #    并将 "Qwen/Qwen3-235B-A22B-Instruct" 作为 JSON body 里的 model 参数。
+      #
+      #    如果用户坚持不要前缀，我们尝试直接写，看看 LiteLLM 是否能自动推断。
+      #    或者使用 `custom_llm_provider: openai` 参数。
+      
+      model: Qwen/Qwen3-235B-A22B-Instruct
+      # 显式指定 provider 为 openai，这样 model 字段就可以只写纯名称
+      custom_llm_provider: openai
       # ⚠️ 请将 192.168.1.X 替换为您局域网服务器的实际 IP 地址
       api_base: http://192.168.1.X:8001/v1
       api_key: empty
