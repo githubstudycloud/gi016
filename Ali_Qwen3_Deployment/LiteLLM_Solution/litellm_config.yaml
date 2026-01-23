@@ -5,7 +5,14 @@ model_list:
       model: openai/Qwen/Qwen3-235B-A22B-Instruct
       api_base: http://localhost:8001/v1
       api_key: sk-empty
-      # Enable debug logging
+      debug: true
+
+  # Add support for the new model name requested by user
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      api_base: http://localhost:8001/v1
+      api_key: sk-empty
       debug: true
 
 general_settings:
