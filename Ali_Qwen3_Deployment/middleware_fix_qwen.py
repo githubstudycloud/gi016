@@ -157,8 +157,8 @@ def parse_hermes_xml(content):
                                 args["command"] = args.pop(alias)
                                 break
 
-            # Read/Write/Glob/Grep: 路径参数别名修复
-            # 期望 file_path 或 path
+            # Read/Write/Glob/Grep/LS/DeleteFile: 路径参数别名修复
+            # 期望 file_path 或 path (部分工具)
             if isinstance(args, dict):
                 # 统一 file_path 和 path
                 # 许多工具 (如 Read, Write) 期望 file_path，但模型常输出 path
@@ -170,6 +170,36 @@ def parse_hermes_xml(content):
                 if "filename" in args and "file_path" not in args:
                     print(f"⚠️ [{name}] 检测到 'filename' 参数，自动重命名为 'file_path'")
                     args["file_path"] = args.pop("filename")
+                
+                # 针对 LS/Glob 工具：它们其实是用 path 参数的，如果我们上面误转成了 file_path，要转回来
+                if name in ["LS", "ls", "Glob", "glob"]:
+                     if "file_path" in args and "path" not in args:
+                         print(f"⚠️ [{name}] 修正: 将 'file_path' 还原为 'path'")
+                         args["path"] = args.pop("file_path")
+                
+                # 针对 DeleteFile 工具：期望 file_paths (列表)，模型可能输出 file_path (字符串)
+                if name in ["DeleteFile", "delete_file"]:
+                    if "file_path" in args and "file_paths" not in args:
+                         print(f"⚠️ [{name}] 检测到单个 'file_path'，自动包装为 'file_paths' 列表")
+                         args["file_paths"] = [args.pop("file_path")]
+                    elif "path" in args and "file_paths" not in args: # 上面可能已经转成了 file_path，这里防万一
+                         print(f"⚠️ [{name}] 检测到单个 'path'，自动包装为 'file_paths' 列表")
+                         args["file_paths"] = [args.pop("path")]
+                
+                # 针对 Write 工具：内容参数修复 (text/code -> content)
+                if name in ["Write", "write_file", "WriteFile"]:
+                     if "text" in args and "content" not in args:
+                         print(f"⚠️ [{name}] 检测到 'text' 参数，自动重命名为 'content'")
+                         args["content"] = args.pop("text")
+                     if "code" in args and "content" not in args:
+                         print(f"⚠️ [{name}] 检测到 'code' 参数，自动重命名为 'content'")
+                         args["content"] = args.pop("code")
+
+                # 针对 Grep 工具：pattern 修复 (regex -> pattern)
+                if name in ["Grep", "grep"]:
+                     if "regex" in args and "pattern" not in args:
+                         print(f"⚠️ [{name}] 检测到 'regex' 参数，自动重命名为 'pattern'")
+                         args["pattern"] = args.pop("regex")
                     
                 # 针对 Read 工具的特殊检查
                 if name in ["Read", "read_file", "ReadFile"]:
