@@ -1,0 +1,23 @@
+model_list:
+  # 映射 Claude 模型名称到本地 Qwen 服务
+  # 这样客户端请求 "claude-3-5-sonnet-20240620" 时，实际会调用 Qwen
+  - model_name: claude-3-5-sonnet-20240620
+    litellm_params:
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      api_base: http://localhost:8000/v1
+      api_key: sk-empty
+      timeout: 600  # 大模型推理可能较慢，增加超时时间
+
+  # 也可以直接映射通用名称
+  - model_name: claude-3-opus-20240229
+    litellm_params:
+      model: openai/Qwen/Qwen3-235B-A22B-Instruct
+      api_base: http://localhost:8000/v1
+      api_key: sk-empty
+
+general_settings:
+  master_key: sk-1234
+  # 允许 LiteLLM 丢弃一些 OpenAI 不支持但 Anthropic 发送的参数，防止 400 错误
+  drop_params: true
+  # 详细日志，用于调试
+  detailed_debug: true
