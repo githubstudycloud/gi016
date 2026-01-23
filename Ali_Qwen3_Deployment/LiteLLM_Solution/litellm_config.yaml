@@ -1,17 +1,17 @@
 model_list:
-  # 将 Claude 请求转发给本地部署的 Qwen3
+  # Forward Claude requests to local Qwen3 deployment
   - model_name: claude-3-5-sonnet-20240620
     litellm_params:
       model: openai/Qwen/Qwen3-235B-A22B-Instruct
       api_base: http://localhost:8001/v1
       api_key: sk-empty
-      # 启用详细日志以便调试
+      # Enable debug logging
       debug: true
 
 general_settings:
-  # 设置一个 Master Key，客户端连接时需要使用这个 Key
+  # Master key for client connection
   master_key: sk-1234
-  # 允许局域网访问
+  # Allow localhost access
   allow_requests_from_localhost: true
-  # 禁用遥测
+  # Disable telemetry
   disable_telemetry: true
