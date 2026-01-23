@@ -55,11 +55,13 @@ def parse_hermes_xml(content):
     return tool_calls
 
 def convert_claude_messages_to_openai(claude_body):
-    """将 Claude 格式的 messages 请求转换为 OpenAI 格式"""
+    """
+    将 Claude 格式的 messages 请求转换为 OpenAI 格式
+    同时处理历史记录中的 tool_use 和 tool_result，将其转换为 Hermes XML 格式
+    """
     openai_messages = []
     
     # 1. 处理 system prompt
-    # 我们稍后会在这里注入工具定义，所以这里只提取原始 system
     system_content = claude_body.get("system", "")
     if system_content:
         openai_messages.append({
@@ -72,20 +74,46 @@ def convert_claude_messages_to_openai(claude_body):
         role = msg["role"]
         content = msg["content"]
         
-        # Claude 的 content 可能是列表（包含 text 或 image）
+        text_parts = []
+        
+        # Claude 的 content 可能是列表（包含 text, tool_use, tool_result）
         if isinstance(content, list):
-            new_content = ""
             for part in content:
-                if part.get("type") == "text":
-                    new_content += part.get("text", "")
-                # 暂时忽略 image
+                part_type = part.get("type")
+                
+                if part_type == "text":
+                    text_parts.append(part.get("text", ""))
+                    
+                elif part_type == "tool_use":
+                    # 将 Claude 的工具调用转换为 Hermes 的 <tool_code>
+                    args_json = json.dumps(part.get("input", {}))
+                    tool_xml = f"\n<tool_code>\n{{\"name\": \"{part['name']}\", \"arguments\": {args_json}}}\n</tool_code>"
+                    text_parts.append(tool_xml)
+                    
+                elif part_type == "tool_result":
+                    # 将 Claude 的工具结果转换为 Hermes 的 <tool_output>
+                    # content 可能是字符串或列表
+                    res_content = part.get("content", "")
+                    res_text = ""
+                    if isinstance(res_content, str):
+                        res_text = res_content
+                    elif isinstance(res_content, list):
+                        for sub in res_content:
+                            if sub.get("type") == "text":
+                                res_text += sub.get("text", "")
+                    
+                    tool_output_xml = f"\n<tool_output>\n{res_text}\n</tool_output>"
+                    text_parts.append(tool_output_xml)
+                    
+        elif isinstance(content, str):
+            text_parts.append(content)
             
-            openai_messages.append({"role": role, "content": new_content})
-        else:
-            openai_messages.append({"role": role, "content": content})
+        final_content = "".join(text_parts)
+        
+        # 只有当内容不为空时才添加，或者如果之前是工具调用，这里必须保留
+        openai_messages.append({"role": role, "content": final_content})
             
-    # 3. 处理 tools
-    # 注意：我们不再返回 tools 列表给 vLLM API，而是返回 raw_tools 用于生成 System Prompt
+    # 3. 处理 tools (提取定义用于注入 System Prompt)
     raw_tools = []
     if "tools" in claude_body:
         for tool in claude_body["tools"]:
@@ -155,21 +183,22 @@ def convert_openai_response_to_claude(openai_resp):
         }
     }
 
-# 拦截 Claude 的核心路由
 @app.post("/v1/messages")
 @app.post("/messages")
 async def proxy_claude_messages(request: Request):
     try:
         body = await request.json()
-        print("📨 收到 Claude 协议请求 (/v1/messages)")
+        print("\n📨 [Claude Request] 收到 /v1/messages 请求")
         
         # 1. 估算 Token (80k 保护)
         total_chars = 0
         if "system" in body:
              total_chars += len(body["system"])
         for msg in body.get("messages", []):
-            if isinstance(msg["content"], str):
-                total_chars += len(msg["content"])
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            # 简化估算，忽略 list 结构长度
         
         if (total_chars // 3) > MAX_CONTEXT_TOKENS:
              return JSONResponse(
@@ -183,12 +212,10 @@ async def proxy_claude_messages(request: Request):
                 status_code=400
             )
 
-        # 2. 协议转换: Claude -> OpenAI
+        # 2. 协议转换: Claude -> OpenAI (并注入历史工具调用 XML)
         openai_messages, raw_tools = convert_claude_messages_to_openai(body)
         
         # === 核心修正：工具 Prompt 注入 ===
-        # 如果有工具，我们手动把它们注入到 System Prompt 中
-        # 而不是通过 API 的 tools 参数传递 (因为 vLLM 没配 parser 会报错)
         if raw_tools:
             tool_prompt = generate_tool_system_prompt(raw_tools)
             
@@ -200,10 +227,8 @@ async def proxy_claude_messages(request: Request):
                     break
             
             if system_msg_index >= 0:
-                # 追加到现有 system 后面
                 openai_messages[system_msg_index]["content"] += "\n\n" + tool_prompt
             else:
-                # 插入新的 system 消息到开头
                 openai_messages.insert(0, {
                     "role": "system",
                     "content": tool_prompt
@@ -211,6 +236,7 @@ async def proxy_claude_messages(request: Request):
             
             print(f"💉 已注入 {len(raw_tools)} 个工具定义到 System Prompt")
 
+        # 3. 构建发送给 vLLM 的请求 (严格过滤参数)
         openai_req = {
             "model": TARGET_MODEL_NAME,
             "messages": openai_messages,
@@ -219,10 +245,14 @@ async def proxy_claude_messages(request: Request):
             "stream": False # 强制关闭流式
         }
         
-        # 注意：这里不再设置 openai_req["tools"]，完全依赖 Prompt
+        # 🚫 严禁发送 tools 和 tool_choice，否则 vLLM 会报错
+        if "tools" in openai_req: del openai_req["tools"]
+        if "tool_choice" in openai_req: del openai_req["tool_choice"]
 
-        # 3. 发送给 vLLM (OpenAI 接口)
-        print(f"🚀 转发给 vLLM (模型: {TARGET_MODEL_NAME})...")
+        # 打印调试信息
+        print(f"🚀 转发给 vLLM (端口 8001)...")
+        # print(f"🔍 Payload Preview: {json.dumps(openai_req, ensure_ascii=False)[:200]}...")
+
         response = await client.post(
             f"{VLLM_API_BASE}/chat/completions",
             json=openai_req,
@@ -231,8 +261,8 @@ async def proxy_claude_messages(request: Request):
         )
         
         if response.status_code != 200:
-            print(f"❌ vLLM 报错: {response.text}")
-            return JSONResponse(content={"error": "vLLM error"}, status_code=response.status_code)
+            print(f"❌ vLLM 报错 (Status {response.status_code}): {response.text}")
+            return JSONResponse(content={"error": f"vLLM Error: {response.text}"}, status_code=response.status_code)
             
         openai_result = response.json()
         
@@ -245,7 +275,6 @@ async def proxy_claude_messages(request: Request):
             extracted_tools = parse_hermes_xml(content)
             if extracted_tools:
                 choice["message"]["tool_calls"] = extracted_tools
-                # 不清空 content，保留思考过程
         
         # 5. 协议转换: OpenAI -> Claude
         claude_response = convert_openai_response_to_claude(openai_result)
@@ -258,7 +287,7 @@ async def proxy_claude_messages(request: Request):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
-    print(f"🚀 Claude 协议兼容层已启动")
+    print(f"🚀 Claude 协议兼容层已启动 (vLLM 400 修复版)")
     print(f"🎯 目标模型: {TARGET_MODEL_NAME}")
     print(f"🔑 API Key: {VLLM_API_KEY}")
     print(f"📡 监听端口: {PORT} (请配置 Claude Code Base URL 为 http://localhost:{PORT})")
