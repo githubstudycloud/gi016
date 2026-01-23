@@ -34,24 +34,48 @@ def estimate_tokens(text):
 def parse_hermes_xml(content):
     """尝试从文本中提取 Hermes 风格的 <tool_code> XML"""
     tool_calls = []
-    pattern = r"<tool_code>\s*(.*?)\s*</tool_code>"
-    matches = re.findall(pattern, content, re.DOTALL)
+    # 增强正则：支持换行、Markdown 代码块
+    # 匹配模式：<tool_code>...内容...</tool_code>，内容可能包含 ```json ... ```
+    pattern = r"<tool_code>\s*(?:```json)?\s*(.*?)\s*(?:```)?\s*</tool_code>"
+    matches = re.findall(pattern, content, re.DOTALL | re.IGNORECASE)
     
+    if not matches:
+        # 尝试备用模式：直接匹配 ```json { ... } ``` 如果它紧跟在某些关键词后面？
+        # 目前先只依赖 tool_code
+        pass
+
     for i, code_str in enumerate(matches):
         try:
-            clean_json = re.sub(r"^```json\s*|\s*```$", "", code_str.strip(), flags=re.IGNORECASE)
+            # 清洗可能残留的 markdown 标记
+            clean_json = code_str.strip()
+            if clean_json.startswith("```json"): clean_json = clean_json[7:]
+            if clean_json.startswith("```"): clean_json = clean_json[3:]
+            if clean_json.endswith("```"): clean_json = clean_json[:-3]
+            clean_json = clean_json.strip()
+            
             tool_call_data = json.loads(clean_json)
+            
+            # 验证必要字段
+            if "name" not in tool_call_data:
+                print(f"⚠️ 工具调用缺少 name 字段: {clean_json}")
+                continue
+                
+            arguments = tool_call_data.get("arguments", {})
+            if isinstance(arguments, dict):
+                arguments = json.dumps(arguments)
+            
             tool_calls.append({
                 "id": f"call_{i}_{os.urandom(4).hex()}",
                 "type": "function",
                 "function": {
                     "name": tool_call_data.get("name"),
-                    "arguments": json.dumps(tool_call_data.get("arguments", {}))
+                    "arguments": arguments
                 }
             })
-        except json.JSONDecodeError:
-            print(f"⚠️ 解析工具调用 JSON 失败: {code_str}")
+        except json.JSONDecodeError as e:
+            print(f"⚠️ 解析工具调用 JSON 失败: {e}\n原始内容: {code_str}")
             continue
+            
     return tool_calls
 
 def convert_claude_messages_to_openai(claude_body):
@@ -92,7 +116,6 @@ def convert_claude_messages_to_openai(claude_body):
                     
                 elif part_type == "tool_result":
                     # 将 Claude 的工具结果转换为 Hermes 的 <tool_output>
-                    # content 可能是字符串或列表
                     res_content = part.get("content", "")
                     res_text = ""
                     if isinstance(res_content, str):
@@ -102,6 +125,7 @@ def convert_claude_messages_to_openai(claude_body):
                             if sub.get("type") == "text":
                                 res_text += sub.get("text", "")
                     
+                    # 简化 output，防止过长
                     tool_output_xml = f"\n<tool_output>\n{res_text}\n</tool_output>"
                     text_parts.append(tool_output_xml)
                     
@@ -109,8 +133,6 @@ def convert_claude_messages_to_openai(claude_body):
             text_parts.append(content)
             
         final_content = "".join(text_parts)
-        
-        # 只有当内容不为空时才添加，或者如果之前是工具调用，这里必须保留
         openai_messages.append({"role": role, "content": final_content})
             
     # 3. 处理 tools (提取定义用于注入 System Prompt)
@@ -126,20 +148,36 @@ def convert_claude_messages_to_openai(claude_body):
     return openai_messages, raw_tools
 
 def generate_tool_system_prompt(tools):
-    """生成 Hermes/Qwen 风格的工具定义 Prompt"""
+    """生成 Hermes/Qwen 风格的工具定义 Prompt (增强版)"""
     tools_json = json.dumps(tools, indent=2)
     prompt = f"""
-You have access to the following tools:
+# Tool Usage Instructions
+You are an intelligent assistant capable of using tools. You have access to the following tools:
+
 <tools>
 {tools_json}
 </tools>
 
-When you need to call a tool, please output the tool call inside <tool_code> tags.
-The format should be a JSON object with "name" and "arguments" keys.
-Example:
+# How to use tools
+1. When you need to get information or perform an action, choose the appropriate tool from the list.
+2. Output the tool call **strictly** inside <tool_code> tags.
+3. The content inside <tool_code> must be a valid JSON object with "name" and "arguments".
+
+# Example
+User: "What's the weather in Beijing?"
+Assistant:
 <tool_code>
-{{"name": "get_weather", "arguments": {{"location": "Beijing"}}}}
+{{
+    "name": "get_weather",
+    "arguments": {{
+        "location": "Beijing"
+    }}
+}}
 </tool_code>
+
+# Important
+- Do NOT output the tool call in Markdown code blocks (like ```json). Just use <tool_code> tags directly.
+- If no tool is needed, just respond with normal text.
 """
     return prompt
 
@@ -152,10 +190,18 @@ def convert_openai_response_to_claude(openai_resp):
     stop_reason = "end_turn"
     
     # 1. 处理文本内容
-    if message.get("content"):
+    # 如果有工具调用，通常不需要返回 content，除非是 thinking process
+    # 但 Claude Code 可能需要 text 来显示思考过程
+    raw_content = message.get("content", "")
+    
+    # 尝试移除 raw_content 中的 <tool_code> 部分，只保留思考文本
+    # 这样用户界面上不会显示 XML 代码
+    display_text = re.sub(r"<tool_code>.*?</tool_code>", "", raw_content, flags=re.DOTALL).strip()
+    
+    if display_text:
         claude_content.append({
             "type": "text",
-            "text": message["content"]
+            "text": display_text
         })
         
     # 2. 处理工具调用
@@ -198,7 +244,6 @@ async def proxy_claude_messages(request: Request):
             content = msg.get("content", "")
             if isinstance(content, str):
                 total_chars += len(content)
-            # 简化估算，忽略 list 结构长度
         
         if (total_chars // 3) > MAX_CONTEXT_TOKENS:
              return JSONResponse(
@@ -212,14 +257,14 @@ async def proxy_claude_messages(request: Request):
                 status_code=400
             )
 
-        # 2. 协议转换: Claude -> OpenAI (并注入历史工具调用 XML)
+        # 2. 协议转换: Claude -> OpenAI
         openai_messages, raw_tools = convert_claude_messages_to_openai(body)
         
         # === 核心修正：工具 Prompt 注入 ===
         if raw_tools:
             tool_prompt = generate_tool_system_prompt(raw_tools)
             
-            # 检查 messages 里是否已经有 system 消息
+            # A. 注入到 System Prompt (首选)
             system_msg_index = -1
             for i, msg in enumerate(openai_messages):
                 if msg["role"] == "system":
@@ -234,25 +279,27 @@ async def proxy_claude_messages(request: Request):
                     "content": tool_prompt
                 })
             
-            print(f"💉 已注入 {len(raw_tools)} 个工具定义到 System Prompt")
+            # B. [强化] 注入到最后一条 User Message (如果 Context 很长，System Prompt 可能被遗忘)
+            if openai_messages and openai_messages[-1]["role"] == "user":
+                reminder = "\n\n(Reminder: You have tools available. Use <tool_code> JSON format to call them if needed.)"
+                openai_messages[-1]["content"] += reminder
+            
+            print(f"💉 已注入 {len(raw_tools)} 个工具定义 (System + User Reminder)")
 
-        # 3. 构建发送给 vLLM 的请求 (严格过滤参数)
+        # 3. 构建发送给 vLLM 的请求
         openai_req = {
             "model": TARGET_MODEL_NAME,
             "messages": openai_messages,
             "max_tokens": body.get("max_tokens", 4096),
             "temperature": body.get("temperature", 0.7),
-            "stream": False # 强制关闭流式
+            "stream": False 
         }
         
-        # 🚫 严禁发送 tools 和 tool_choice，否则 vLLM 会报错
+        # 🚫 删除 API 参数
         if "tools" in openai_req: del openai_req["tools"]
         if "tool_choice" in openai_req: del openai_req["tool_choice"]
 
-        # 打印调试信息
         print(f"🚀 转发给 vLLM (端口 8001)...")
-        # print(f"🔍 Payload Preview: {json.dumps(openai_req, ensure_ascii=False)[:200]}...")
-
         response = await client.post(
             f"{VLLM_API_BASE}/chat/completions",
             json=openai_req,
@@ -266,20 +313,31 @@ async def proxy_claude_messages(request: Request):
             
         openai_result = response.json()
         
+        # === 调试日志：打印模型原始回复，方便排查 ===
+        raw_response_content = openai_result["choices"][0]["message"].get("content", "")
+        print(f"🔍 [Model Response Preview]: {raw_response_content[:200]}...")
+        if "<tool_code>" in raw_response_content:
+            print("✨ 检测到 XML 标记！")
+        else:
+            print("⚠️ 未检测到 XML 标记 (可能是纯文本回复)")
+        # ==========================================
+
         # 4. 检查并修复 XML 工具调用
         choice = openai_result["choices"][0]
         content = choice["message"].get("content", "") or ""
         
         if "<tool_code>" in content:
-            print(f"🛠️ 捕获到 XML 工具调用，正在修复...")
+            print(f"🛠️ 正在解析 XML 工具调用...")
             extracted_tools = parse_hermes_xml(content)
             if extracted_tools:
+                print(f"✅ 解析成功: {len(extracted_tools)} 个工具")
                 choice["message"]["tool_calls"] = extracted_tools
+            else:
+                print(f"❌ 解析失败: 找到了标签但无法提取 JSON")
         
         # 5. 协议转换: OpenAI -> Claude
         claude_response = convert_openai_response_to_claude(openai_result)
         
-        print("✅ 响应成功返回")
         return JSONResponse(content=claude_response)
 
     except Exception as e:
@@ -287,8 +345,8 @@ async def proxy_claude_messages(request: Request):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
-    print(f"🚀 Claude 协议兼容层已启动 (vLLM 400 修复版)")
+    print(f"🚀 Claude 协议兼容层已启动 (vLLM 400 修复版 + 增强调试)")
     print(f"🎯 目标模型: {TARGET_MODEL_NAME}")
     print(f"🔑 API Key: {VLLM_API_KEY}")
-    print(f"📡 监听端口: {PORT} (请配置 Claude Code Base URL 为 http://localhost:{PORT})")
+    print(f"📡 监听端口: {PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
